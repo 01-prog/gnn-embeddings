@@ -1,0 +1,82 @@
+# H1 experiment: "GNNs using co-purchase links beat feature-only classifiers."
+#
+# Design rules (from supervisor):
+#   - Each embedding type gets its own hyperparameter search.
+#   - Fixed seeds, deterministic splits.
+#   - >= 5 seeds per config; report mean ± std + 95% CI.
+#   - Every run logs a JSON file to results/.
+
+# --------------------------------------------------------------------------
+# Dataset
+# --------------------------------------------------------------------------
+dataset:
+  root: data                    # root/ of AmazonCopurchase; raw files in root/raw/
+  categories:
+    - Electronics               # 1 top-level category → label_level=1 gives subcats
+  split_seed: 0
+  split_ratios: [0.6, 0.2, 0.2]
+  label_level: 1                # classify into 2nd-level subcategories
+
+# --------------------------------------------------------------------------
+# Encoder (Tier-0 baseline only for H1; H3 will sweep all encoders)
+# --------------------------------------------------------------------------
+encoder:
+  name: tfidf
+  max_features: 10000
+
+# --------------------------------------------------------------------------
+# Models + per-model hyperparameter search spaces
+# --------------------------------------------------------------------------
+models:
+  - name: GCN
+    search_space:
+      lr:              [0.005, 0.01, 0.05]
+      weight_decay:    [0.0, 0.0001, 0.001]
+      hidden_channels: [64, 128, 256]
+      dropout:         [0.0, 0.3, 0.5]
+
+  - name: GraphSAGE
+    search_space:
+      lr:              [0.005, 0.01, 0.05]
+      weight_decay:    [0.0, 0.0001, 0.001]
+      hidden_channels: [64, 128, 256]
+      dropout:         [0.0, 0.3, 0.5]
+
+  - name: GAT
+    search_space:
+      lr:              [0.005, 0.01, 0.05]
+      weight_decay:    [0.0, 0.0001, 0.001]
+      hidden_channels: [32, 64, 128]   # per-head width; actual width = hidden * num_heads
+      dropout:         [0.0, 0.3, 0.5]
+
+  - name: MLP
+    search_space:
+      lr:              [0.005, 0.01, 0.05]
+      weight_decay:    [0.0, 0.0001, 0.001]
+      hidden_channels: [64, 128, 256]
+      dropout:         [0.0, 0.3, 0.5]
+
+  - name: LogReg
+    search_space:
+      C: [0.01, 0.1, 1.0, 10.0, 100.0]
+
+# --------------------------------------------------------------------------
+# Training settings (shared defaults; per-trial values override these)
+# --------------------------------------------------------------------------
+training:
+  num_layers:       2
+  num_heads:        2     # GAT only
+  max_epochs:       200
+  patience:         20
+  warmup_epochs:    10
+  min_lr:           0.0001
+  n_hparam_trials:  20    # random trials per model during hparam search
+  n_seed_runs:      5     # seed sweep repetitions for final evaluation
+  base_seed:        0
+
+# --------------------------------------------------------------------------
+# Output paths
+# --------------------------------------------------------------------------
+results:
+  dir:             results
+  output_file:     results/h1_results.json

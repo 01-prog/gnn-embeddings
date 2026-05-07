@@ -1,0 +1,27 @@
+# Core deep learning
+torch>=2.2,<3.0
+torch-geometric>=2.5,<3.0
+
+# Encoders / NLP / vision
+transformers>=4.40,<5.0
+sentence-transformers>=2.7,<4.0
+
+# Classical ML
+scikit-learn>=1.4,<2.0
+
+# Data handling
+pandas>=2.2,<3.0
+numpy>=1.26,<3.0
+h5py>=3.10,<4.0
+
+# Configs
+pyyaml>=6.0,<7.0
+hydra-core>=1.3,<2.0
+
+# Plotting
+matplotlib>=3.8,<4.0
+seaborn>=0.13,<1.0
+
+# Tooling
+pytest>=8.0,<9.0
+tqdm>=4.66,<5.0

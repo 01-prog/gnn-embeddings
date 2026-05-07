@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import torch; import torch_geometric; print\\('torch', torch.__version__\\); print\\('pyg', torch_geometric.__version__\\)\")",
+      "Bash(python -c \"import sklearn; print\\('sklearn', sklearn.__version__\\)\")",
+      "Bash(python -m src.eval.harness)",
+      "Bash(python -m pytest tests -v)",
+      "Bash(python -m pip install --quiet pytest)",
+      "Bash(git check-ignore *)",
+      "Bash(python -m pytest tests -q)",
+      "Bash(python -m src.models.baselines)",
+      "Bash(python -m src.train)",
+      "Bash(python scripts/run_h1.py --config experiments/h1_graph_vs_nograph.yaml --mock --models MLP LogReg)",
+      "Bash(python -m pip install --quiet pyyaml)"
+    ]
+  }
+}

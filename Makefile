@@ -3,7 +3,7 @@
 # a one-liner shell command, so behavior stays the same on Linux, macOS, and
 # Windows (under git-bash / WSL).
 
-PYTHON ?= python
+PYTHON ?= python3
 PIP    ?= $(PYTHON) -m pip
 PYTEST ?= $(PYTHON) -m pytest
 RUFF   ?= $(PYTHON) -m ruff

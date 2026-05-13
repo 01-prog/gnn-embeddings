@@ -41,7 +41,7 @@ import time
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
-from typing import Any, Type
+from typing import Any, Callable, Type
 
 import numpy as np
 import torch
@@ -51,6 +51,7 @@ from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 
 from src.eval.harness import evaluate
 from src.models.baselines import LogRegClassifier
+from src.utils.device import resolve_device
 from src.utils.seed import set_seed
 
 logger = logging.getLogger(__name__)
@@ -139,15 +140,15 @@ class TrainConfig:
 def _resolve_device(device_str: str) -> torch.device:
     """Resolve the ``device`` string from ``TrainConfig``.
 
+    Delegates to :func:`src.utils.device.resolve_device`.
+
     Args:
-        device_str: ``"auto"``, ``"cpu"``, or ``"cuda"``.
+        device_str: ``"auto"``, ``"cpu"``, ``"cuda"``, etc.
 
     Returns:
         A ``torch.device``.
     """
-    if device_str == "auto":
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    return torch.device(device_str)
+    return resolve_device(device_str)
 
 
 def _move_data(data: Any, device: torch.device) -> Any:
@@ -455,6 +456,8 @@ def hyperparameter_search(
     n_trials: int,
     base_config: TrainConfig,
     results_dir: str | Path = "results",
+    warm_start_params: dict[str, Any] | None = None,
+    model_factory: Callable[["TrainConfig"], nn.Module] | None = None,
 ) -> dict[str, Any]:
     """Random search over ``search_space`` for the best val accuracy.
 
@@ -465,17 +468,36 @@ def hyperparameter_search(
     3. Appends a JSONL record to
        ``results/hparam_search_{encoder}_{model}.jsonl``.
 
+    If ``warm_start_params`` is provided it is always run as trial 0,
+    which is useful when re-using a previously found best configuration
+    (e.g., the H1 best GNN hyperparams as a starting point for H3).
+    The remaining ``n_trials - 1`` slots are filled with random samples.
+
+    If ``model_factory`` is provided it is called with the trial config
+    to build the model, completely bypassing ``model_cls`` and
+    ``_build_model_for_config``.  This is used by the H2 multimodal
+    runner to build :class:`~src.fusion.fusion.FusedModel` instances
+    without modifying the training loop.
+
     Args:
-        model_cls: Model class to instantiate for each trial.
+        model_cls: Model class to instantiate for each trial.  Ignored
+            when ``model_factory`` is not ``None``.
         data: Graph data object.
         search_space: Dict mapping hyperparameter names to candidate
             value lists.  GNN search spaces typically include ``lr``,
             ``weight_decay``, ``hidden_channels``, ``dropout``.
             LogReg search spaces typically include only ``C``.
-        n_trials: Number of random trials.
+        n_trials: Total number of trials (including the warm-start trial
+            when ``warm_start_params`` is not ``None``).
         base_config: Template config; per-trial values override matching
             fields.
         results_dir: Directory for JSONL logs and checkpoints.
+        warm_start_params: Optional dict of hyperparameter values to
+            evaluate as trial 0 before the random search begins.
+        model_factory: Optional callable ``(TrainConfig) → nn.Module``.
+            When provided, replaces the default
+            ``_build_model_for_config(model_cls, config)`` call so
+            callers can inject custom architectures (e.g. FusedModel).
 
     Returns:
         Dict with keys ``"best_params"`` (dict) and
@@ -490,17 +512,26 @@ def hyperparameter_search(
     )
     rng = np.random.default_rng(base_config.seed)
 
+    # Build full list of param dicts: optional warm-start first, then random.
+    all_trial_params: list[dict[str, Any]] = []
+    if warm_start_params is not None:
+        all_trial_params.append(dict(warm_start_params))
+    n_random = n_trials - len(all_trial_params)
+    for _ in range(n_random):
+        all_trial_params.append(_sample_params(search_space, rng))
+
     best_val = -1.0
     best_params: dict[str, Any] = {}
 
     logger.info(
-        "Hyperparameter search: model=%s encoder=%s n_trials=%d",
+        "Hyperparameter search: model=%s encoder=%s n_trials=%d%s",
         base_config.model_name, base_config.encoder_name, n_trials,
+        " (warm-start included)" if warm_start_params else "",
     )
 
-    for trial_idx in range(n_trials):
-        params = _sample_params(search_space, rng)
-        logger.info("Trial %d/%d | params=%s", trial_idx + 1, n_trials, params)
+    for trial_idx, params in enumerate(all_trial_params):
+        label = "warm-start" if trial_idx == 0 and warm_start_params else "random"
+        logger.info("Trial %d/%d [%s] | params=%s", trial_idx + 1, n_trials, label, params)
 
         # Build config for this trial (use trial_idx as seed for determinism).
         trial_config = replace(
@@ -513,7 +544,10 @@ def hyperparameter_search(
             C=float(params.get("C", base_config.C)),
         )
 
-        model = _build_model_for_config(model_cls, trial_config)
+        if model_factory is not None:
+            model = model_factory(trial_config)
+        else:
+            model = _build_model_for_config(model_cls, trial_config)
         result = train_model(model, data, trial_config)
 
         record = {

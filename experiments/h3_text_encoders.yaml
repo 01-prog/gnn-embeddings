@@ -1,0 +1,163 @@
+# H3 experiment: "Modern encoders (BERT, Qwen3, CLIP) beat TF-IDF / BoW baselines."
+#
+# Three comparison axes (printed as separate sub-tables by run_h3_text.py):
+#
+#   (a) Baseline axis  — tier 0→1→2 progression, all encoders in one table.
+#   (b) Size axis      — Qwen3-0.6B vs 4B vs 8B (same retrieval objective).
+#   (c) Pretraining-loss axis — SBERT (MLM) vs CLIP-text (contrastive)
+#                               vs Qwen3-0.6B (retrieval) at roughly similar
+#                               encoder parameter counts.
+#
+# Design rules (from supervisor):
+#   - Each encoder gets its own hyperparameter search (FAIR).
+#   - H1 best-GNN hyperparams are used as warm-start trial 0 for every search.
+#   - Fixed seeds, deterministic splits shared with H1 (same split_seed).
+#   - >= 5 seeds; report mean ± std + 95% CI.
+#   - Every run logs a JSON file to results/.
+
+# --------------------------------------------------------------------------
+# Dataset  (identical to H1 so splits are reused)
+# --------------------------------------------------------------------------
+dataset:
+  root: data
+  categories:
+    - Electronics
+  split_seed: 0
+  split_ratios: [0.6, 0.2, 0.2]
+  label_level: 1
+
+# --------------------------------------------------------------------------
+# H1 results path (used to extract best GNN + hyperparams as warm-start)
+# --------------------------------------------------------------------------
+h1_results_path: results/h1_results.json
+
+# Fallback values used when h1_results.json does not exist yet
+# (e.g., during --mock smoke tests).
+fallback_gnn: GCN
+fallback_hparams:
+  lr: 0.01
+  weight_decay: 0.0001
+  hidden_channels: 128
+  dropout: 0.3
+
+# --------------------------------------------------------------------------
+# Encoder grid
+#
+# Fields recognised by build_encoder (via registry):
+#   type, name, model_name, model_size, batch_size, max_features, min_df,
+#   normalize_embeddings, pooling
+#
+# Metadata fields (extracted by the script, NOT forwarded to constructors):
+#   modality, tier, encoder_size_params, pretraining_objective
+# --------------------------------------------------------------------------
+encoders:
+
+  # ---- Tier 0: sparse baselines ------------------------------------------
+  - name: bow
+    type: BagOfWords
+    max_features: 10000
+    min_df: 2
+    modality: text
+    tier: 0
+    encoder_size_params:      # null → "N/A" in table
+    pretraining_objective: none
+
+  - name: tfidf
+    type: TFIDF
+    max_features: 10000
+    min_df: 2
+    modality: text
+    tier: 0
+    encoder_size_params:
+    pretraining_objective: none
+
+  # ---- Tier 1: classic dense (MLM / NLI fine-tuned) ----------------------
+  - name: sbert
+    type: SentenceBERT
+    model_name: sentence-transformers/all-MiniLM-L6-v2
+    batch_size: 64
+    normalize_embeddings: true
+    modality: text
+    tier: 1
+    encoder_size_params: 22000000   # ~22 M parameters
+    pretraining_objective: MLM
+
+  # ---- Tier 1: contrastive (CLIP text) ------------------------------------
+  - name: clip-text
+    type: CLIPText
+    model_name: openai/clip-vit-b-32
+    batch_size: 64
+    normalize_embeddings: true
+    modality: text
+    tier: 1
+    encoder_size_params: 63000000   # ~63 M parameters (text tower)
+    pretraining_objective: contrastive
+
+  # ---- Tier 2: retrieval-pretrained LLM -----------------------------------
+  - name: qwen3-0.6B
+    type: Qwen3
+    model_size: "0.6B"
+    batch_size: 16
+    pooling: last_token
+    normalize_embeddings: true
+    modality: text
+    tier: 2
+    encoder_size_params: 600000000
+    pretraining_objective: retrieval
+
+  # ---- Tier 3: scaling study ----------------------------------------------
+  - name: qwen3-4B
+    type: Qwen3
+    model_size: "4B"
+    batch_size: 8
+    pooling: last_token
+    normalize_embeddings: true
+    modality: text
+    tier: 3
+    encoder_size_params: 4000000000
+    pretraining_objective: retrieval
+
+  - name: qwen3-8B
+    type: Qwen3
+    model_size: "8B"
+    batch_size: 4
+    pooling: last_token
+    normalize_embeddings: true
+    modality: text
+    tier: 3
+    encoder_size_params: 8000000000
+    pretraining_objective: retrieval
+
+# --------------------------------------------------------------------------
+# GNN hyperparameter search space
+#
+# A fresh search is always run for each encoder because in_channels changes
+# with the embedding dimension.  H1 best hyperparams are trial 0 (warm-start).
+# --------------------------------------------------------------------------
+gnn_search_space:
+  lr:              [0.005, 0.01, 0.05]
+  weight_decay:    [0.0, 0.0001, 0.001]
+  hidden_channels: [64, 128, 256]
+  dropout:         [0.0, 0.3, 0.5]
+
+# --------------------------------------------------------------------------
+# Training settings
+# --------------------------------------------------------------------------
+training:
+  num_layers:       2
+  num_heads:        2         # GAT only
+  max_epochs:       200
+  patience:         20
+  warmup_epochs:    10
+  min_lr:           0.0001
+  n_hparam_trials:  20        # random trials per (encoder, model) pair
+  n_seed_runs:      5         # seed-sweep repetitions for the final evaluation
+  base_seed:        0
+
+# --------------------------------------------------------------------------
+# Output paths
+# --------------------------------------------------------------------------
+results:
+  dir:            results
+  output_file:    results/h3_results.json
+  embeddings_dir: data/embeddings

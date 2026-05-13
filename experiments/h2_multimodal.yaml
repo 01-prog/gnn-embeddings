@@ -1,0 +1,176 @@
+# H2 experiment: "Multimodal (text + image) embeddings beat single-modality."
+#
+# The H2 grid compares three modalities on the same graph and GNN backbone:
+#
+#   text_only   — best text encoder from H3 (no images).
+#   image_only  — each vision encoder; missing images filled with zero vectors.
+#   text+image  — fusion of best text encoder + each vision encoder using
+#                 three fusion strategies (concat / weighted / gated).
+#
+# Each (modality × encoder × fusion) combination gets its own hyperparameter
+# search (FAIR) and seed sweep (STATISTICALLY SOUND).
+#
+# Missing-image confounder analysis
+# ----------------------------------
+# Because some product images cannot be downloaded, nodes with missing images
+# receive zero vectors.  The H2 runner flags a ">5 pp gap" warning when
+# test accuracy on nodes WITH available images is more than 5 percentage
+# points higher than on nodes WITHOUT images, indicating that the model may
+# be exploiting the missing-data pattern rather than image content.
+#
+# Design rules (from supervisor):
+#   - Each combo gets its own hyperparameter search (FAIR).
+#   - H1 best-GNN and H3 best-text-encoder hyperparams used as warm-starts.
+#   - Fixed seeds, deterministic splits shared with H1 (same split_seed).
+#   - >= 5 seeds; report mean ± std + 95% CI.
+#   - Every run logs a JSON file to results/.
+
+# --------------------------------------------------------------------------
+# Dataset  (identical to H1/H3 so splits are reused)
+# --------------------------------------------------------------------------
+dataset:
+  root: data
+  categories:
+    - Electronics
+  split_seed: 0
+  split_ratios: [0.6, 0.2, 0.2]
+  label_level: 1
+
+# --------------------------------------------------------------------------
+# Prior-experiment result paths (used for warm-starts)
+# --------------------------------------------------------------------------
+h1_results_path: results/h1_results.json
+h3_results_path: results/h3_results.json
+
+# Fallbacks when result files don't exist (e.g., --mock smoke tests).
+fallback_gnn: GCN
+fallback_hparams:
+  lr: 0.01
+  weight_decay: 0.0001
+  hidden_channels: 128
+  dropout: 0.3
+
+# Name of the text encoder to use when H3 results are unavailable.
+# Must match one of the ``name`` values in the ``text_encoders`` list below.
+fallback_text_encoder: tfidf
+
+# --------------------------------------------------------------------------
+# Image download settings
+# --------------------------------------------------------------------------
+image_pipeline:
+  max_workers: 8       # concurrent download threads
+  timeout: 15          # per-request timeout in seconds
+  max_retries: 2       # retry attempts before giving up on a URL
+  cache_dir: data/images
+
+# --------------------------------------------------------------------------
+# Text encoders
+#
+# All encoders from H3 are listed here so the runner can look up their
+# constructor configs by name.  The runner selects the best one from H3
+# results (or falls back to ``fallback_text_encoder``) and uses it for
+# both text_only and text+image modalities.
+# --------------------------------------------------------------------------
+text_encoders:
+
+  - name: tfidf
+    type: TFIDF
+    max_features: 10000
+    min_df: 2
+
+  - name: bow
+    type: BagOfWords
+    max_features: 10000
+    min_df: 2
+
+  - name: sbert
+    type: SentenceBERT
+    model_name: sentence-transformers/all-MiniLM-L6-v2
+    batch_size: 64
+    normalize_embeddings: true
+
+  - name: clip-text
+    type: CLIPText
+    model_name: openai/clip-vit-b-32
+    batch_size: 64
+    normalize_embeddings: true
+
+  - name: qwen3-0.6B
+    type: Qwen3
+    model_size: "0.6B"
+    batch_size: 16
+    pooling: last_token
+    normalize_embeddings: true
+
+# --------------------------------------------------------------------------
+# Vision encoders
+#
+# Iterated for both ``image_only`` and ``text+image`` modalities.
+# Tier 0 (supervised) → Tier 1 (contrastive) → Tier 2 (self-supervised).
+# --------------------------------------------------------------------------
+vision_encoders:
+
+  - name: resnet
+    type: ResNet
+    batch_size: 32
+    normalize_embeddings: false   # 2048-dim avg-pool features, not normalized
+
+  - name: clip-vision
+    type: CLIPVision
+    model_name: openai/clip-vit-b-32
+    batch_size: 32
+    normalize_embeddings: true    # same CLIP space as clip-text encoder
+
+  - name: dinov2-B
+    type: DINOv2
+    model_size: "B"
+    batch_size: 32
+    normalize_embeddings: true    # L2-normalize DINOv2 CLS tokens
+
+# --------------------------------------------------------------------------
+# Fusion strategies
+#
+# Applied only for ``text+image`` modality.
+# Each strategy is paired with every (text_encoder × vision_encoder) combo.
+# --------------------------------------------------------------------------
+fusion_strategies: [concat, weighted, gated]
+
+# --------------------------------------------------------------------------
+# Modalities to evaluate
+#
+# text_only   — 1 run per text encoder (1 encoder selected from H3)
+# image_only  — 1 run per vision encoder (3 encoders)
+# text+image  — 1 run per (vision_encoder × fusion_strategy) = 9 runs
+# --------------------------------------------------------------------------
+modalities: [text_only, image_only, text+image]
+
+# --------------------------------------------------------------------------
+# GNN hyperparameter search space
+# --------------------------------------------------------------------------
+gnn_search_space:
+  lr:              [0.005, 0.01, 0.05]
+  weight_decay:    [0.0, 0.0001, 0.001]
+  hidden_channels: [64, 128, 256]
+  dropout:         [0.0, 0.3, 0.5]
+
+# --------------------------------------------------------------------------
+# Training settings
+# --------------------------------------------------------------------------
+training:
+  num_layers:       2
+  num_heads:        2           # GAT only
+  max_epochs:       200
+  patience:         20
+  warmup_epochs:    10
+  min_lr:           0.0001
+  n_hparam_trials:  20          # random HP trials per (combo) pair
+  n_seed_runs:      5           # seed-sweep repetitions
+  base_seed:        0
+
+# --------------------------------------------------------------------------
+# Output paths
+# --------------------------------------------------------------------------
+results:
+  dir:            results
+  output_file:    results/h2_results.json
+  embeddings_dir: data/embeddings

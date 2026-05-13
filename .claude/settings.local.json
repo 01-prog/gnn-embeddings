@@ -11,7 +11,16 @@
       "Bash(python -m src.models.baselines)",
       "Bash(python -m src.train)",
       "Bash(python scripts/run_h1.py --config experiments/h1_graph_vs_nograph.yaml --mock --models MLP LogReg)",
-      "Bash(python -m pip install --quiet pyyaml)"
+      "Bash(python -m pip install --quiet pyyaml)",
+      "Bash(python -m src.encoders.base)",
+      "Bash(python -m pytest tests/test_encoders.py -v --tb=short)",
+      "Bash(python -m pytest tests/test_encoders.py -v --tb=long --collect-only)",
+      "Bash(python -m pytest tests/test_encoders.py -v --tb=long -p no:warnings)",
+      "Bash(python -c \"import tests.test_encoders\")",
+      "Bash(python -m pytest tests/ -v --tb=short)",
+      "Bash(python scripts/run_h3_text.py --config experiments/h3_text_encoders.yaml --mock --encoders bow tfidf)",
+      "Bash(python scripts/run_h3_text.py --config experiments/h3_text_encoders.yaml --mock --encoders bow tfidf --model MLP)",
+      "Bash(python -m pytest tests/test_fusion.py -v --tb=short)"
     ]
   }
 }

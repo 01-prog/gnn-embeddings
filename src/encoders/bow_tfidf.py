@@ -188,6 +188,205 @@ def load_embeddings(path: str | Path) -> tuple[torch.Tensor, dict[str, int]]:
 
 
 # ---------------------------------------------------------------------------
+# BaseEncoder-compatible adapter classes
+# ---------------------------------------------------------------------------
+
+
+class BagOfWordsEncoder:
+    """``BaseEncoder``-compatible wrapper around :class:`BagOfWords`.
+
+    Unlike the raw ``BagOfWords`` (which has ``fit_transform`` / ``transform``),
+    this adapter conforms to the ``BaseEncoder`` interface used by the H3
+    experiment pipeline: ``fit(train_inputs)`` + ``encode(all_inputs)`` +
+    ``encode_cached(...)``.
+
+    The vocabulary is *learned on training texts only* to prevent label leakage
+    into val / test vocabularies; ``encode()`` can then be called on any split.
+
+    Args:
+        cache_dir: Directory for cached ``.pt`` embedding files.
+        device: Ignored (BoW runs on CPU via sklearn).  Present for API parity.
+        max_features: Maximum vocabulary size.
+        min_df: Minimum document frequency for a token to enter the vocabulary.
+    """
+
+    # Lazy import of BaseEncoder to avoid circular imports at module parse time.
+    @staticmethod
+    def _base():
+        from src.encoders.base import BaseEncoder
+        return BaseEncoder
+
+    def __init_subclass__(cls, **kw):
+        super().__init_subclass__(**kw)
+
+    def __init__(
+        self,
+        cache_dir: str | Path = "data/embeddings",
+        device: str = "auto",  # noqa: ARG002
+        max_features: int = 10_000,
+        min_df: int = 2,
+    ) -> None:
+        from pathlib import Path as _Path
+        self.cache_dir = _Path(cache_dir)
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self._bow = BagOfWords(max_features=max_features, min_df=min_df)
+        self._fitted = False
+        self.max_features = max_features
+
+    # ---- BaseEncoder protocol ----
+
+    @property
+    def embedding_dim(self) -> int:
+        """Actual vocabulary size after fitting, ``max_features`` before."""
+        if self._fitted:
+            return len(self._bow.vocabulary_)
+        return self.max_features
+
+    def fit(self, train_inputs: list[str]) -> None:
+        """Fit the BoW vocabulary on training texts only.
+
+        Args:
+            train_inputs: List of training strings.
+        """
+        _ = self._bow.fit_transform(train_inputs)
+        self._fitted = True
+
+    def encode(self, inputs: list[str]) -> torch.Tensor:
+        """Return dense BoW vectors for all inputs.
+
+        Args:
+            inputs: List of strings of length N.
+
+        Returns:
+            Float32 tensor ``(N, embedding_dim)``.
+
+        Raises:
+            RuntimeError: If ``fit()`` has not been called yet.
+        """
+        if not self._fitted:
+            raise RuntimeError("Call fit(train_inputs) before encode().")
+        return self._bow.transform(inputs)
+
+    def encode_cached(self, inputs: list[str], cache_key: str) -> torch.Tensor:
+        """Encode with caching.  Fits must already have been called.
+
+        Args:
+            inputs: All texts to encode.
+            cache_key: Stem used for the ``.pt`` cache filename.
+
+        Returns:
+            Float32 tensor ``(N, embedding_dim)``.
+        """
+        cache_path_ = self.cache_dir / f"{cache_key}.pt"
+        if cache_path_.exists():
+            try:
+                x = torch.load(cache_path_, weights_only=True)
+                logger.info("Loaded cached BoW: '%s' shape=%s", cache_key, tuple(x.shape))
+                return x
+            except Exception as exc:
+                logger.warning("Cache load failed (%s) — re-encoding.", exc)
+        x = self.encode(inputs).float()
+        torch.save(x, cache_path_)
+        logger.info("Cached BoW: '%s' → %s", cache_key, cache_path_)
+        return x
+
+    def __repr__(self) -> str:  # noqa: D401
+        return (
+            f"BagOfWordsEncoder(embedding_dim={self.embedding_dim}, "
+            f"max_features={self.max_features}, fitted={self._fitted})"
+        )
+
+
+class TFIDFEncoder:
+    """``BaseEncoder``-compatible wrapper around :class:`TFIDF`.
+
+    Identical protocol to :class:`BagOfWordsEncoder` but uses TF-IDF
+    weighting (sublinear TF, L2 norm) instead of raw counts.
+
+    Args:
+        cache_dir: Directory for cached ``.pt`` embedding files.
+        device: Ignored (TF-IDF runs on CPU via sklearn).
+        max_features: Maximum vocabulary size.
+        min_df: Minimum document frequency.
+    """
+
+    def __init__(
+        self,
+        cache_dir: str | Path = "data/embeddings",
+        device: str = "auto",  # noqa: ARG002
+        max_features: int = 10_000,
+        min_df: int = 2,
+    ) -> None:
+        from pathlib import Path as _Path
+        self.cache_dir = _Path(cache_dir)
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self._tfidf = TFIDF(max_features=max_features, min_df=min_df)
+        self._fitted = False
+        self.max_features = max_features
+
+    @property
+    def embedding_dim(self) -> int:
+        """Actual vocabulary size after fitting, ``max_features`` before."""
+        if self._fitted:
+            return len(self._tfidf.vocabulary_)
+        return self.max_features
+
+    def fit(self, train_inputs: list[str]) -> None:
+        """Fit the TF-IDF vocabulary / IDF table on training texts only.
+
+        Args:
+            train_inputs: List of training strings.
+        """
+        _ = self._tfidf.fit_transform(train_inputs)
+        self._fitted = True
+
+    def encode(self, inputs: list[str]) -> torch.Tensor:
+        """Return dense TF-IDF vectors for all inputs.
+
+        Args:
+            inputs: List of strings of length N.
+
+        Returns:
+            Float32 tensor ``(N, embedding_dim)``.
+
+        Raises:
+            RuntimeError: If ``fit()`` has not been called yet.
+        """
+        if not self._fitted:
+            raise RuntimeError("Call fit(train_inputs) before encode().")
+        return self._tfidf.transform(inputs)
+
+    def encode_cached(self, inputs: list[str], cache_key: str) -> torch.Tensor:
+        """Encode with caching.
+
+        Args:
+            inputs: All texts to encode.
+            cache_key: Stem used for the ``.pt`` cache filename.
+
+        Returns:
+            Float32 tensor ``(N, embedding_dim)``.
+        """
+        cache_path_ = self.cache_dir / f"{cache_key}.pt"
+        if cache_path_.exists():
+            try:
+                x = torch.load(cache_path_, weights_only=True)
+                logger.info("Loaded cached TF-IDF: '%s' shape=%s", cache_key, tuple(x.shape))
+                return x
+            except Exception as exc:
+                logger.warning("Cache load failed (%s) — re-encoding.", exc)
+        x = self.encode(inputs).float()
+        torch.save(x, cache_path_)
+        logger.info("Cached TF-IDF: '%s' → %s", cache_key, cache_path_)
+        return x
+
+    def __repr__(self) -> str:  # noqa: D401
+        return (
+            f"TFIDFEncoder(embedding_dim={self.embedding_dim}, "
+            f"max_features={self.max_features}, fitted={self._fitted})"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Smoke test
 # ---------------------------------------------------------------------------
 

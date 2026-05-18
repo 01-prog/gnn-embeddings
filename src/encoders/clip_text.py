@@ -139,13 +139,19 @@ class CLIPTextEncoder(BaseEncoder):
             batch = inputs[i: i + batch_size]
             while True:
                 try:
-                    tokens = self._tokenizer(
+                    _raw_tokens = self._tokenizer(
                         batch,
                         padding=True,
                         truncation=True,
                         max_length=_CLIP_MAX_TOKENS,
                         return_tensors="pt",
-                    ).to(self.device)
+                    )
+                    # BatchEncoding has .to(); plain dicts (e.g. test mocks) do not.
+                    # Move each tensor individually so both cases work.
+                    tokens = {
+                        k: v.to(self.device) if isinstance(v, torch.Tensor) else v
+                        for k, v in _raw_tokens.items()
+                    }
                     with torch.no_grad():
                         out = self._model(**tokens)
                     # text_embeds is the projected [EOS] representation.

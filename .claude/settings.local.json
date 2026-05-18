@@ -20,7 +20,8 @@
       "Bash(python -m pytest tests/ -v --tb=short)",
       "Bash(python scripts/run_h3_text.py --config experiments/h3_text_encoders.yaml --mock --encoders bow tfidf)",
       "Bash(python scripts/run_h3_text.py --config experiments/h3_text_encoders.yaml --mock --encoders bow tfidf --model MLP)",
-      "Bash(python -m pytest tests/test_fusion.py -v --tb=short)"
+      "Bash(python -m pytest tests/test_fusion.py -v --tb=short)",
+      "Bash(python -m pytest tests/test_encoders.py -v)"
     ]
   }
 }

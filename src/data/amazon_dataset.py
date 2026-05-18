@@ -610,8 +610,8 @@ if __name__ == "__main__":
 
     ds = AmazonCopurchase(
         root=tmp,
-        categories=["Electronics"],
-        split_seed=0,
+        split_seed=0,        
+        categories=["Books", "Electronics", "Movies_and_TV", "CDs_and_Vinyl", "Clothing_Shoes_and_Jewelry", "Home_and_Kitchen", "Kindle_Store", "Sports_and_Outdoors", "Cell_Phones_and_Accessories", "Health_and_Personal_Care", "Toys_and_Games", "Video_Games", "Tools_and_Home_Improvement", "Beauty", "Apps_for_Android", "Office_Products", "Pet_Supplies", "Automotive", "Grocery_and_Gourmet_Food", "Patio,_Lawn_and_Garden", "Musical_Instruments", "Baby", "Digital_Music", "Amazon_Instant_Video"],
         split_ratios=(0.6, 0.2, 0.2),
         label_level=1,
         min_class_count=2,
